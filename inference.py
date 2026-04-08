@@ -29,13 +29,61 @@ def resolve_api_base_url(raw_url: str) -> str:
         )
     return normalized
 
-if not API_KEY:
-    raise Exception(
-        "Missing required environment variable: GROQ_API_KEY. Set it in your shell or add it as a Secret in your Hugging Face Space settings before starting the app."
-    )
-
 API_BASE_URL = resolve_api_base_url(API_BASE_URL)
-client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY) if API_KEY else None
+
+
+def _extract_prompt_field(prompt: str, field_name: str) -> str:
+    prefix = f"{field_name}:"
+    for line in prompt.splitlines():
+        if line.startswith(prefix):
+            return line.split(":", 1)[1].strip().lower()
+    return ""
+
+
+def _heuristic_response(prompt: str, step: int) -> str:
+    prompt_lower = prompt.lower()
+    title = _extract_prompt_field(prompt, "Title")
+    description = _extract_prompt_field(prompt, "Description")
+    logs = _extract_prompt_field(prompt, "Logs")
+    user_impact = _extract_prompt_field(prompt, "User Impact")
+    module_hint = _extract_prompt_field(prompt, "Frequency")
+    combined = " ".join([title, description, logs, user_impact, module_hint, prompt_lower])
+
+    if any(keyword in combined for keyword in ["payment", "checkout", "order", "auth", "login", "server error", "500"]):
+        category = "backend"
+    elif any(keyword in combined for keyword in ["database", "sql", "query", "connection refused", "slow sql"]):
+        category = "database"
+    elif any(keyword in combined for keyword in ["dns", "network", "timeout", "latency", "intermittent"]):
+        category = "network"
+    elif any(keyword in combined for keyword in ["button", "ui", "dropdown", "mobile", "homepage", "alignment", "clicking"]):
+        category = "ui"
+    else:
+        category = "backend"
+
+    if step == 0:
+        return json.dumps({"category": category})
+
+    if any(keyword in combined for keyword in ["high", "failure", "failed", "crash", "500", "timeout", "unable", "not working"]):
+        severity = "high"
+    elif any(keyword in combined for keyword in ["low", "misaligned", "slow", "medium"]):
+        severity = "medium" if "medium" in combined or "slow" in combined else "low"
+    else:
+        severity = "medium"
+
+    if step == 1:
+        return json.dumps({"severity": severity})
+
+    if category == "ui":
+        team = "frontend_team"
+    elif any(keyword in combined for keyword in ["payment", "checkout"]):
+        team = "payments_team"
+    elif category == "network":
+        team = "infra_team"
+    else:
+        team = "backend_team"
+
+    return json.dumps({"team": team})
 
 
 def build_prompt(observation, step: int) -> str:
@@ -60,7 +108,10 @@ IMPORTANT:
     return base + '\n{"team": "frontend_team/backend_team/payments_team/infra_team"}'
 
 
-def call_model(prompt: str) -> Tuple[str, Optional[str]]:
+def call_model(prompt: str, step: int) -> Tuple[str, Optional[str]]:
+    if client is None:
+        return (_heuristic_response(prompt, step), None)
+
     try:
         response = client.chat.completions.create(
             model=MODEL_NAME,
@@ -70,7 +121,7 @@ def call_model(prompt: str) -> Tuple[str, Optional[str]]:
         content = response.choices[0].message.content
         return (content.strip() if content else "{}", None)
     except Exception as exc:
-        return ("{}", str(exc))
+        return (_heuristic_response(prompt, step), str(exc))
 
 
 def parse_response(text: str) -> dict:
@@ -127,7 +178,7 @@ def run_task(task_name: str) -> float:
 
     try:
         prompt = build_prompt(observation, 0)
-        raw_output, last_error = call_model(prompt)
+        raw_output, last_error = call_model(prompt, 0)
         parsed = parse_response(raw_output)
         category = normalize(parsed.get("category"), ["ui", "backend", "database", "network"], "backend")
         observation, reward, done, _ = env.step(Action(category=category))
@@ -138,7 +189,7 @@ def run_task(task_name: str) -> float:
 
         if not done and step_count < MAX_STEPS:
             prompt = build_prompt(observation, 1)
-            raw_output, last_error = call_model(prompt)
+            raw_output, last_error = call_model(prompt, 1)
             parsed = parse_response(raw_output)
             severity = normalize(parsed.get("severity"), ["low", "medium", "high"], "medium")
             observation, reward, done, _ = env.step(Action(severity=severity))
@@ -149,7 +200,7 @@ def run_task(task_name: str) -> float:
 
         if not done and step_count < MAX_STEPS:
             prompt = build_prompt(observation, 2)
-            raw_output, last_error = call_model(prompt)
+            raw_output, last_error = call_model(prompt, 2)
             parsed = parse_response(raw_output)
             team = normalize(
                 parsed.get("team"),

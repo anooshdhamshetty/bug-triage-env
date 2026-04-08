@@ -9,6 +9,8 @@ CATEGORY_WEIGHT = 0.3
 SEVERITY_WEIGHT = 0.3
 TEAM_WEIGHT = 0.4
 
+SCORE_EPSILON = 0.01
+
 
 # =========================
 # CORE GRADING FUNCTION
@@ -34,7 +36,12 @@ def grade_prediction(pred: Dict, expected: Dict) -> float:
     if pred.get("team") == expected.get("team"):
         score += TEAM_WEIGHT
 
-    return round(score, 2)
+    score = round(score, 2)
+    if score <= 0.0:
+        return SCORE_EPSILON
+    if score >= 1.0:
+        return round(1.0 - SCORE_EPSILON, 2)
+    return score
 
 
 # =========================
@@ -47,9 +54,9 @@ def grade_easy(pred: Dict, expected: Dict) -> float:
     """
 
     if pred.get("category") == expected.get("category"):
-        return 1.0
+        return round(1.0 - SCORE_EPSILON, 2)
 
-    return 0.0
+    return SCORE_EPSILON
 
 
 def grade_medium(pred: Dict, expected: Dict) -> float:
@@ -65,7 +72,12 @@ def grade_medium(pred: Dict, expected: Dict) -> float:
     if pred.get("severity") == expected.get("severity"):
         score += 0.5
 
-    return round(score, 2)
+    score = round(score, 2)
+    if score <= 0.0:
+        return SCORE_EPSILON
+    if score >= 1.0:
+        return round(1.0 - SCORE_EPSILON, 2)
+    return score
 
 
 def grade_hard(pred: Dict, expected: Dict) -> float:
