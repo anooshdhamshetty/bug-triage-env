@@ -1,0 +1,27 @@
+name: bug-triage-env
+description: RL environment for bug triage using signal-based reasoning
+version: "1.0"
+
+observation_space:
+  type: object
+  properties:
+    title:
+      type: string
+    description:
+      type: string
+    logs:
+      type: string
+    user_impact:
+      type: string
+    frequency:
+      type: integer
+
+action_space:
+  type: object
+  properties:
+    category:
+      type: string
+    severity:
+      type: string
+    team:
+      type: string
